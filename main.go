@@ -71,9 +71,37 @@ func main() {
 		),
 	)
 
+	execDynamicTool := mcp.NewTool("ssh_exec_dynamic",
+		mcp.WithDescription("Execute a command with dynamic SSH parameters (no env required)"),
+		mcp.WithString("server",
+			mcp.Required(),
+			mcp.Description("SSH server in host or user@host format"),
+		),
+		mcp.WithString("user",
+			mcp.Description("SSH username (required if server has no user@)"),
+		),
+		mcp.WithInt("port",
+			mcp.Description("SSH port (default 22)"),
+		),
+		mcp.WithString("password",
+			mcp.Description("SSH password"),
+		),
+		mcp.WithString("key_path",
+			mcp.Description("Path to private key file"),
+		),
+		mcp.WithString("passphrase",
+			mcp.Description("Private key passphrase"),
+		),
+		mcp.WithString("command",
+			mcp.Required(),
+			mcp.Description("Command to run on the remote host"),
+		),
+	)
+
 	s.AddTool(execTool, execHandler)
 	s.AddTool(uploadTool, uploadHandler)
 	s.AddTool(downloadTool, downloadHandler)
+	s.AddTool(execDynamicTool, execDynamicHandler)
 
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Printf("Server error: %v\n", err)
@@ -146,6 +174,70 @@ func downloadHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.Cal
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("download complete: %s", stats.String())), nil
+}
+
+func execDynamicHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	server, err := request.RequireString("server")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	command, err := request.RequireString("command")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	args := request.GetArguments()
+	port := 22
+	if _, ok := args["port"]; ok {
+		portValue, err := request.RequireInt("port")
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		if portValue <= 0 || portValue > 65535 {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid port: %d", portValue)), nil
+		}
+		port = portValue
+	}
+
+	user, host := parseServer(server)
+	if host == "" {
+		return mcp.NewToolResultError("server is empty"), nil
+	}
+	if user == "" {
+		user = request.GetString("user", "")
+	}
+	if user == "" {
+		return mcp.NewToolResultError("user is required when server has no user@"), nil
+	}
+
+	password := request.GetString("password", "")
+	keyPath := request.GetString("key_path", "")
+	passphrase := request.GetString("passphrase", "")
+
+	auth, err := authFromParams(keyPath, passphrase, password)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	client, err := goph.NewConn(&goph.Config{
+		User:     user,
+		Addr:     host,
+		Port:     uint(port),
+		Auth:     auth,
+		Timeout:  goph.DefaultTimeout,
+		Callback: ssh.InsecureIgnoreHostKey(),
+	})
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("ssh connect: %v", err)), nil
+	}
+	defer client.Close()
+
+	output, err := client.Run(command)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("command failed: %v\n%s", err, string(output))), nil
+	}
+
+	return mcp.NewToolResultText(string(output)), nil
 }
 
 func newClient() (*goph.Client, error) {
@@ -242,6 +334,29 @@ func loadAuth() (goph.Auth, error) {
 
 	if len(auth) == 0 {
 		return nil, errors.New("no SSH auth configured; set SSH_KEY or SSH_PASSWORD")
+	}
+
+	return auth, nil
+}
+
+func authFromParams(keyPath, passphrase, password string) (goph.Auth, error) {
+	var auth goph.Auth
+
+	keyPath = strings.TrimSpace(keyPath)
+	if keyPath != "" {
+		keyAuth, err := goph.Key(keyPath, passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load key_path: %w", err)
+		}
+		auth = append(auth, keyAuth...)
+	}
+
+	if password != "" {
+		auth = append(auth, goph.KeyboardInteractive(password)...)
+	}
+
+	if len(auth) == 0 {
+		return nil, errors.New("no auth provided; set key_path or password")
 	}
 
 	return auth, nil

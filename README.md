@@ -8,6 +8,7 @@ It exposes three tools over stdio:
 - `ssh_exec`: run a remote command and return output
 - `ssh_upload`: upload a local file or directory to remote
 - `ssh_download`: download a remote file or directory to local
+- `ssh_exec_dynamic`: run a remote command with per-call SSH parameters
 
 ## Requirements
 
@@ -54,6 +55,14 @@ From an MCP client, call tools with the following arguments:
 - `ssh_download`
   - `remote_path` (string)
   - `local_path` (string)
+- `ssh_exec_dynamic`
+  - `server` (string, host or user@host)
+  - `user` (string, required if server has no user@)
+  - `port` (int, optional)
+  - `password` (string, optional)
+  - `key_path` (string, optional)
+  - `passphrase` (string, optional)
+  - `command` (string)
 
 ## Notes
 
