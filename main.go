@@ -80,7 +80,7 @@ func main() {
 		mcp.WithString("user",
 			mcp.Description("SSH username (required if server has no user@)"),
 		),
-		mcp.WithInt("port",
+		mcp.WithNumber("port",
 			mcp.Description("SSH port (default 22)"),
 		),
 		mcp.WithString("password",
